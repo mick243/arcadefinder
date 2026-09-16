@@ -1,0 +1,259 @@
+import crypto from 'node:crypto';
+import { createReadStream } from 'node:fs';
+import fs from 'node:fs/promises';
+import { Readable } from 'node:stream';
+import path from 'node:path';
+import { r2ConfigFromEnv, R2Storage } from './r2';
+
+/**
+ * 게시글 첨부 파일 저장소 — 사진과 동영상.
+ *
+ * 저장소는 둘 중 하나입니다. 호출부(API 라우트)와 DB(`post_images.storage_key`)는
+ * 어느 쪽이든 같습니다 — 키는 언제나 `<내용 해시>.<확장자>` 입니다.
+ *
+ *   - **Cloudflare R2** (lib/r2.ts) — `R2_ACCOUNT_ID` 등 R2_* 넷이 다 있을 때.
+ *     운영 저장소입니다. Vercel 처럼 파일시스템이 읽기 전용이거나 배포마다 비워지는
+ *     곳에서는 이것만 동작합니다.
+ *   - **로컬 `uploads/posts/`** — R2 설정이 없을 때. 개발 기본값이고, 한 대의 서버에
+ *     직접 띄우는 배포(deploy/)에서도 그대로 씁니다.
+ *
+ * 개발 사본을 R2 로 옮길 때는 `uploads/posts/` 의 파일을 키 그대로(`posts/<파일명>`)
+ * 버킷에 넣으면 됩니다 — 파일명이 곧 키라 DB 는 손대지 않습니다.
+ *
+ * ⚠ `public/` 에 두지 않습니다. `/api/uploads/:id` 로만 나가므로, 나중에 비공개
+ *   게시판이 생기면 그 한 곳에 권한 조건을 넣으면 됩니다.
+ */
+
+const ROOT = path.join(process.cwd(), 'uploads', 'posts');
+
+/**
+ * R2 드라이버 — 첫 사용 때 한 번 만듭니다. 모듈 로드 시점에 만들지 않는 이유는
+ * 테스트가 환경변수 없이 `detect` 만 불러 쓰기 때문입니다.
+ * `null` 은 "설정 없음 → 로컬" 입니다.
+ */
+let r2: R2Storage | null | undefined;
+function storage(): R2Storage | null {
+  if (r2 === undefined) {
+    const cfg = r2ConfigFromEnv();
+    r2 = cfg ? new R2Storage(cfg) : null;
+  }
+  return r2;
+}
+
+/** 지금 쓰는 저장소 이름 — /api/health 와 로그용 */
+export function storageDriver(): 'r2' | 'local' {
+  return storage() ? 'r2' : 'local';
+}
+
+/** 사진 한 장의 상한 */
+export const MAX_IMAGE_BYTES = 5 * 1024 * 1024; // 5MB
+
+/**
+ * 동영상 하나의 상한.
+ *
+ * 사진과 따로 두는 이유: 5MB 는 몇 초짜리 mp4 도 안 들어가고, 반대로 사진에
+ * 50MB 를 허용하면 목록에서 썸네일 하나가 수십 MB 가 됩니다.
+ *
+ * 이 값을 올릴 때는 저장 공간만 보지 말고, 업로드가 한 요청에 메모리로 다 올라온다는
+ * 점(`file.arrayBuffer()`)을 함께 보세요 — 스트리밍 저장으로 바꾸기 전에는
+ * 동시 업로드 수 × 이 값이 그대로 메모리입니다.
+ */
+export const MAX_VIDEO_BYTES = 50 * 1024 * 1024; // 50MB
+
+/** 어떤 종류든 이보다 크면 형식을 확인할 필요조차 없다 (라우트의 선제 거절용) */
+export const MAX_UPLOAD_BYTES = Math.max(MAX_IMAGE_BYTES, MAX_VIDEO_BYTES);
+
+export interface FileKind {
+  mime: string;
+  ext: string;
+  maxBytes: number;
+}
+
+const asciiAt = (b: Buffer, from: number, to: number): string =>
+  b.subarray(from, to).toString('latin1');
+
+/**
+ * mp4 · mov 의 브랜드(ftyp 다음 4바이트).
+ *
+ * 둘은 같은 컨테이너(ISO-BMFF)이고 브랜드로만 갈립니다. 목록에 없는 브랜드는
+ * 받지 않습니다 — "재생은 될지도 모르는 파일" 을 넓게 받는 것보다, 확실히 브라우저가
+ * 재생하는 것만 받는 쪽이 낫습니다 (재생 못 하는 첨부는 사용자에게는 고장입니다).
+ */
+const MP4_BRANDS = ['isom', 'iso2', 'iso4', 'iso5', 'iso6', 'mp41', 'mp42', 'avc1', 'M4V ', 'mmp4'];
+const MOV_BRANDS = ['qt  '];
+
+/**
+ * 확장자와 Content-Type 은 클라이언트가 보내는 값이라 믿을 수 없습니다.
+ * 파일 앞부분의 매직 바이트로 실제 형식을 확인합니다 — .jpg 로 이름만 바꾼
+ * 실행 파일이 업로드되는 걸 막는 가장 싼 방법입니다.
+ */
+const SIGNATURES: { test: (b: Buffer) => boolean; kind: FileKind }[] = [
+  {
+    kind: { mime: 'image/jpeg', ext: 'jpg', maxBytes: MAX_IMAGE_BYTES },
+    test: (b) => b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff,
+  },
+  {
+    kind: { mime: 'image/png', ext: 'png', maxBytes: MAX_IMAGE_BYTES },
+    test: (b) =>
+      b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4e && b[3] === 0x47 &&
+      b[4] === 0x0d && b[5] === 0x0a && b[6] === 0x1a && b[7] === 0x0a,
+  },
+  {
+    kind: { mime: 'image/gif', ext: 'gif', maxBytes: MAX_IMAGE_BYTES },
+    test: (b) => /^GIF8[79]a$/.test(asciiAt(b, 0, 6)),
+  },
+  {
+    // RIFF....WEBP — 크기 4바이트를 건너뛰고 8번째부터 'WEBP'
+    kind: { mime: 'image/webp', ext: 'webp', maxBytes: MAX_IMAGE_BYTES },
+    test: (b) => asciiAt(b, 0, 4) === 'RIFF' && asciiAt(b, 8, 12) === 'WEBP',
+  },
+  {
+    // ....ftypqt   — mov (아이폰 기본 녹화 형식)
+    kind: { mime: 'video/quicktime', ext: 'mov', maxBytes: MAX_VIDEO_BYTES },
+    test: (b) => asciiAt(b, 4, 8) === 'ftyp' && MOV_BRANDS.includes(asciiAt(b, 8, 12)),
+  },
+  {
+    // ....ftyp<브랜드> — mp4
+    kind: { mime: 'video/mp4', ext: 'mp4', maxBytes: MAX_VIDEO_BYTES },
+    test: (b) => asciiAt(b, 4, 8) === 'ftyp' && MP4_BRANDS.includes(asciiAt(b, 8, 12)),
+  },
+];
+
+/** 매직 바이트로 본 실제 형식. 모르는 형식이면 null */
+export function detect(buffer: Buffer): FileKind | null {
+  return SIGNATURES.find((s) => s.test(buffer))?.kind ?? null;
+}
+
+export function isVideoMime(mime: string): boolean {
+  return mime.startsWith('video/');
+}
+
+export class UnsupportedUploadError extends Error {
+  constructor() {
+    super('사진(JPEG · PNG · GIF · WebP) 또는 동영상(MP4 · MOV) 만 올릴 수 있습니다');
+  }
+}
+
+const mb = (bytes: number) => Math.round(bytes / 1024 / 1024);
+
+export class UploadTooLargeError extends Error {
+  constructor(kind?: FileKind) {
+    super(
+      kind
+        ? `${isVideoMime(kind.mime) ? '동영상' : '사진'}은 ${mb(kind.maxBytes)}MB 까지 올릴 수 있습니다`
+        : `첨부는 ${mb(MAX_UPLOAD_BYTES)}MB 까지 올릴 수 있습니다`,
+    );
+  }
+}
+
+export interface SavedFile {
+  storageKey: string;
+  mime: string;
+  bytes: number;
+}
+
+/** 매직 바이트로 형식을 확인하고 내용 해시를 파일명으로 저장합니다. */
+export async function save(buffer: Buffer): Promise<SavedFile> {
+  const kind = detect(buffer);
+  if (!kind) throw new UnsupportedUploadError();
+  // 상한은 형식을 알아낸 뒤에 본다 — 사진과 동영상이 다르기 때문이다.
+  if (buffer.byteLength > kind.maxBytes) throw new UploadTooLargeError(kind);
+
+  const hash = crypto.createHash('sha256').update(buffer).digest('hex');
+  const storageKey = `${hash}.${kind.ext}`;
+
+  const r2 = storage();
+  if (r2) {
+    // 내용 해시가 곧 S3 서명의 payload hash 다 — 두 번 계산하지 않는다.
+    await r2.put(storageKey, buffer, kind.mime, hash);
+    return { storageKey, mime: kind.mime, bytes: buffer.byteLength };
+  }
+
+  await fs.mkdir(ROOT, { recursive: true });
+  const abs = resolveKey(storageKey);
+
+  // 같은 내용이면 같은 파일명이므로 이미 있으면 다시 쓰지 않는다.
+  try {
+    await fs.access(abs);
+  } catch {
+    await fs.writeFile(abs, buffer);
+  }
+
+  return { storageKey, mime: kind.mime, bytes: buffer.byteLength };
+}
+
+/**
+ * 스토리지 키를 실제 경로로 바꿉니다.
+ *
+ * 키는 DB 에서 오지만, 경로 조립은 언제나 방어적으로 합니다 — 어떤 경로로든
+ * `..` 가 섞여 들어오면 uploads 밖의 파일을 읽어 내보낼 수 있습니다.
+ */
+function resolveKey(storageKey: string): string {
+  const abs = path.resolve(ROOT, storageKey);
+  if (abs !== path.join(ROOT, path.basename(storageKey))) {
+    throw new Error(`잘못된 스토리지 키: ${storageKey}`);
+  }
+  return abs;
+}
+
+/** 파일이 없으면 null (DB 행은 있는데 파일이 사라진 경우) */
+export async function read(storageKey: string): Promise<Buffer | null> {
+  const r2 = storage();
+  if (r2) return r2.read(safeKey(storageKey));
+  try {
+    return await fs.readFile(resolveKey(storageKey));
+  } catch {
+    return null;
+  }
+}
+
+/** 파일 크기만. 내용을 읽지 않으므로 28MB 동영상에도 비용이 없다 (R2 는 HEAD 한 번) */
+export async function size(storageKey: string): Promise<number | null> {
+  const r2 = storage();
+  if (r2) return r2.size(safeKey(storageKey));
+  try {
+    const stat = await fs.stat(resolveKey(storageKey));
+    return stat.isFile() ? stat.size : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * R2 키도 로컬 경로와 같은 규칙으로 거릅니다 — 구분자가 섞이면 prefix 밖의 객체를
+ * 가리킬 수 있습니다. 키는 언제나 `<hex>.<ext>` 한 조각입니다.
+ */
+function safeKey(storageKey: string): string {
+  if (storageKey !== path.basename(storageKey) || storageKey.includes('\\')) {
+    throw new Error(`잘못된 스토리지 키: ${storageKey}`);
+  }
+  return storageKey;
+}
+
+/**
+ * 파일의 일부(또는 전부)를 **스트림으로** 돌려줍니다.
+ *
+ * 예전에는 `read()` 로 파일 전체를 버퍼에 올린 뒤 `subarray` 로 잘라 보냈습니다.
+ * 동영상은 재생 막대를 끌 때마다 구간 요청이 오는데, 그때마다 28MB 를 통째로
+ * 메모리에 올리고 있었습니다 (2026-09-13 QA). 동시에 몇 명만 봐도 인스턴스 메모리가
+ * 먼저 무너집니다 — 요청은 초당 몇 건이 아니라 **바이트**가 문제인 경로입니다.
+ *
+ * 반환값은 웹 표준 ReadableStream 이라 `new Response(stream)` 에 그대로 들어갑니다.
+ *
+ * R2 에서는 Range 헤더를 그대로 넘겨 R2 가 자른 구간을 흘려보냅니다 — 우리 서버를
+ * 거치는 바이트는 사용자가 실제로 받는 만큼뿐입니다. 호출부가 `size()` 로 존재를
+ * 먼저 확인하므로 여기서 객체가 없으면 에러입니다 (그 사이에 지워진 경우).
+ */
+export async function readRange(
+  storageKey: string,
+  range?: { start: number; end: number },
+): Promise<ReadableStream<Uint8Array>> {
+  const r2 = storage();
+  if (r2) {
+    const stream = await r2.stream(safeKey(storageKey), range);
+    if (!stream) throw new Error(`첨부 파일이 없습니다: ${storageKey}`);
+    return stream;
+  }
+  const nodeStream = createReadStream(resolveKey(storageKey), range);
+  return Readable.toWeb(nodeStream) as ReadableStream<Uint8Array>;
+}
