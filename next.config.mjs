@@ -84,18 +84,6 @@ const nextConfig = {
     ];
   },
 
-  /*
-    서버리스(Vercel) 함수 번들에 `db/*.sql` 을 함께 싣습니다.
-
-    lib/db.ts 가 스키마·마이그레이션을 `fs.readFileSync(process.cwd()/db/…)` 로
-    읽는데, 파일 이름이 코드에 문자열로 박혀 있지 않아(목록을 돌며 조립) Next 의
-    파일 추적이 이 파일들을 못 봅니다. 그러면 첫 요청에서 ENOENT 로 500 입니다.
-    `npm run start` 로 한 대에 띄우는 배포에서는 cwd 에 db/ 가 있으니 영향이 없습니다.
-  */
-  outputFileTracingIncludes: {
-    '/**': ['./db/**/*.sql'],
-  },
-
   // PGlite ships WASM + native-ish assets; keep it out of the bundler.
   // @opentelemetry/*: instrumentation.ts 가 쓰는 Node 전용 SDK. 번들에 말리면 require 컨텍스트가 깨진다.
   serverExternalPackages: ['@electric-sql/pglite', 'pg', '@opentelemetry/api', '@opentelemetry/sdk-trace-node', '@opentelemetry/sdk-trace-base'],

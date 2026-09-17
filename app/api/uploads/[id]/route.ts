@@ -52,7 +52,7 @@ export async function GET(request: Request, ctx: { params: Promise<{ id: string 
   }
 
   if (range) {
-    return new NextResponse(await readRange(attachment.storageKey, range), {
+    return new NextResponse(readRange(attachment.storageKey, range), {
       status: 206,
       headers: {
         ...base,
@@ -62,7 +62,7 @@ export async function GET(request: Request, ctx: { params: Promise<{ id: string 
     });
   }
 
-  return new NextResponse(await readRange(attachment.storageKey), {
+  return new NextResponse(readRange(attachment.storageKey), {
     headers: { ...base, 'Content-Length': String(total) },
   });
 }
