@@ -12,7 +12,6 @@
  *
  * 순수 함수로 두고 env 객체를 인자로 받는 이유는 테스트입니다 (tests/env-check.test.ts).
  */
-import { configuredAppUrl } from './app-url';
 
 export interface EnvCheckResult {
   /** 이것이 하나라도 있으면 기동하지 않아야 합니다 */
@@ -25,22 +24,6 @@ const MIN_SECRET_LENGTH = 16;
 
 /** process.env 모양 — Next 의 타입은 NODE_ENV 를 필수로 두므로 테스트가 부분 객체를 넘길 수 있게 느슨하게 받습니다 */
 export type EnvLike = Record<string, string | undefined>;
-
-/**
- * 앞에 둔 **신뢰하는** 프록시 홉 수. 기본 0 — 프록시가 없다는 뜻입니다.
- * 실제로 이 값을 쓰는 곳은 lib/auth.ts clientKey 이고, 아래 기동 검사와 **같은 함수**를
- * 봅니다 — 따로 두면 "검사는 통과했는데 실제로는 0" 이 조용히 생깁니다.
- *
- * Vercel 에서는 엣지 한 대가 언제나 앞에 있어 1 입니다. 플랫폼이 넣어 주는 `VERCEL` 로
- * 알아냅니다 — 사람이 적어 넣을 값을 줄이려는 것이지 느슨하게 하려는 것이 아닙니다.
- * 홉 수를 **실제로 아는** 경우에만 기본값을 줍니다.
- */
-export function trustedProxyHops(env: EnvLike = process.env): number {
-  const raw = Number(env.TRUSTED_PROXY_HOPS);
-  if (Number.isInteger(raw) && raw > 0) return raw;
-  if (env.VERCEL) return 1;
-  return 0;
-}
 
 export function checkProductionEnv(env: EnvLike = process.env): EnvCheckResult {
   const errors: string[] = [];
@@ -62,23 +45,21 @@ export function checkProductionEnv(env: EnvLike = process.env): EnvCheckResult {
     errors.push('ADMIN_PASSWORD 가 없습니다 — /api/auth/login 이 모든 사용자에게 503 을 돌려줍니다');
   }
 
-  // Vercel 에서는 플랫폼이 주는 운영 도메인이 곧 정답이라 APP_URL 을 따로 안 넣어도 됩니다.
-  const appUrl = configuredAppUrl(env);
-  if (!appUrl) {
+  if (!env.APP_URL) {
     errors.push('APP_URL 이 없습니다 — OAuth 콜백 주소를 Host 헤더로 유추하면 프록시 뒤에서 어긋납니다');
   } else {
     try {
-      const url = new URL(appUrl);
+      const url = new URL(env.APP_URL);
       if (url.protocol !== 'https:') {
         warnings.push(`APP_URL 이 https 가 아닙니다 (${url.protocol}) — 세션 쿠키가 Secure 라 http 에서는 저장되지 않습니다`);
       }
     } catch {
-      errors.push(`APP_URL 이 URL 형식이 아닙니다: ${appUrl}`);
+      errors.push(`APP_URL 이 URL 형식이 아닙니다: ${env.APP_URL}`);
     }
   }
 
-  // Vercel 은 엣지 한 대가 앞에 있어 1 입니다 (trustedProxyHops).
-  if (trustedProxyHops(env) < 1) {
+  const hops = Number(env.TRUSTED_PROXY_HOPS);
+  if (!Number.isInteger(hops) || hops < 1) {
     errors.push(
       'TRUSTED_PROXY_HOPS 가 1 이상이어야 합니다 — 없으면 클라이언트 주소를 모르므로 가입·익명 제보 시도 제한이 0 입니다 (npm run start:cluster 는 자동으로 1 을 넣습니다)',
     );
@@ -86,19 +67,6 @@ export function checkProductionEnv(env: EnvLike = process.env): EnvCheckResult {
 
   if (env.DB_FALLBACK && env.DB_FALLBACK !== 'off') {
     warnings.push('DB_FALLBACK 이 켜져 있습니다 — Postgres 가 끊기면 인스턴스마다 다른 사본에 씁니다. 운영에서는 off 를 권합니다');
-  }
-
-  // 첨부 저장소. 넷 중 일부만 있으면 lib/r2.ts 가 첫 업로드에서 에러를 내므로 여기서 먼저 잡는다.
-  const r2Keys = ['R2_ACCOUNT_ID', 'R2_ACCESS_KEY_ID', 'R2_SECRET_ACCESS_KEY', 'R2_BUCKET'] as const;
-  const r2Given = r2Keys.filter((k) => env[k]?.trim());
-  if (r2Given.length === 0) {
-    warnings.push(
-      'R2_* 가 없습니다 — 첨부가 로컬 디스크(uploads/posts/)에 저장됩니다. Vercel 같은 서버리스에서는 쓰기가 실패하거나 배포마다 사라집니다',
-    );
-  } else if (r2Given.length < r2Keys.length) {
-    errors.push(
-      `R2 설정이 일부만 있습니다 (${r2Given.join(', ')}) — ${r2Keys.join(' · ')} 넷이 다 있어야 첨부 업로드가 됩니다`,
-    );
   }
 
   if (!env.NEXT_PUBLIC_NAVER_MAP_KEY_ID) {

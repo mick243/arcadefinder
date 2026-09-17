@@ -33,7 +33,7 @@ export async function GET(_request: Request, ctx: { params: Promise<{ id: string
     return NextResponse.json({ error: '이모티콘 파일이 없습니다' }, { status: 404 });
   }
 
-  return new NextResponse(await readRange(file.storageKey), {
+  return new NextResponse(readRange(file.storageKey), {
     status: 200,
     headers: {
       'Content-Type': file.mime,

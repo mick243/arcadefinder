@@ -8,7 +8,6 @@ import { promisify } from 'node:util';
 import { NextResponse } from 'next/server';
 import { SESSION_COOKIE, type SessionUser } from './auth-types';
 import { getDb } from './db';
-import { trustedProxyHops as resolveTrustedProxyHops } from './env-check';
 import { isUniqueViolation, violatedConstraint } from './pg-errors';
 
 /**
@@ -879,12 +878,10 @@ export async function clearLoginFailures(key: string): Promise<void> {
  * 값을 정하는 법: 클라이언트와 앱 사이에 내가 운영하는 프록시가 몇 대인가.
  * `npm run start:cluster` 는 프록시를 한 대 두므로 1 입니다(그 스크립트가
  * 자식에게 자동으로 넣어 줍니다). nginx 를 그 앞에 또 두면 2 입니다.
- *
- * 규칙 자체는 lib/env-check.ts 에 있습니다 — 기동 검사와 **같은 값**을 봐야 하기
- * 때문입니다. 따로 두면 "검사는 통과했는데 실제로는 0" 이 조용히 생깁니다.
  */
 function trustedProxyHops(): number {
-  return resolveTrustedProxyHops();
+  const raw = Number(process.env.TRUSTED_PROXY_HOPS);
+  return Number.isInteger(raw) && raw > 0 ? raw : 0;
 }
 
 /**

@@ -3,47 +3,19 @@ import { createReadStream } from 'node:fs';
 import fs from 'node:fs/promises';
 import { Readable } from 'node:stream';
 import path from 'node:path';
-import { r2ConfigFromEnv, R2Storage } from './r2';
 
 /**
  * 게시글 첨부 파일 저장소 — 사진과 동영상.
  *
- * 저장소는 둘 중 하나입니다. 호출부(API 라우트)와 DB(`post_images.storage_key`)는
- * 어느 쪽이든 같습니다 — 키는 언제나 `<내용 해시>.<확장자>` 입니다.
- *
- *   - **Cloudflare R2** (lib/r2.ts) — `R2_ACCOUNT_ID` 등 R2_* 넷이 다 있을 때.
- *     운영 저장소입니다. Vercel 처럼 파일시스템이 읽기 전용이거나 배포마다 비워지는
- *     곳에서는 이것만 동작합니다.
- *   - **로컬 `uploads/posts/`** — R2 설정이 없을 때. 개발 기본값이고, 한 대의 서버에
- *     직접 띄우는 배포(deploy/)에서도 그대로 씁니다.
- *
- * 개발 사본을 R2 로 옮길 때는 `uploads/posts/` 의 파일을 키 그대로(`posts/<파일명>`)
- * 버킷에 넣으면 됩니다 — 파일명이 곧 키라 DB 는 손대지 않습니다.
+ * 지금은 로컬 `uploads/posts/` 에 씁니다. S3/R2 로 옮길 때 이 파일의 `save` 와
+ * `read` 두 함수만 바꾸면 되고, 호출부(API 라우트)와 DB(`post_images.storage_key`)는
+ * 그대로입니다.
  *
  * ⚠ `public/` 에 두지 않습니다. `/api/uploads/:id` 로만 나가므로, 나중에 비공개
  *   게시판이 생기면 그 한 곳에 권한 조건을 넣으면 됩니다.
  */
 
 const ROOT = path.join(process.cwd(), 'uploads', 'posts');
-
-/**
- * R2 드라이버 — 첫 사용 때 한 번 만듭니다. 모듈 로드 시점에 만들지 않는 이유는
- * 테스트가 환경변수 없이 `detect` 만 불러 쓰기 때문입니다.
- * `null` 은 "설정 없음 → 로컬" 입니다.
- */
-let r2: R2Storage | null | undefined;
-function storage(): R2Storage | null {
-  if (r2 === undefined) {
-    const cfg = r2ConfigFromEnv();
-    r2 = cfg ? new R2Storage(cfg) : null;
-  }
-  return r2;
-}
-
-/** 지금 쓰는 저장소 이름 — /api/health 와 로그용 */
-export function storageDriver(): 'r2' | 'local' {
-  return storage() ? 'r2' : 'local';
-}
 
 /** 사진 한 장의 상한 */
 export const MAX_IMAGE_BYTES = 5 * 1024 * 1024; // 5MB
@@ -162,13 +134,6 @@ export async function save(buffer: Buffer): Promise<SavedFile> {
   const hash = crypto.createHash('sha256').update(buffer).digest('hex');
   const storageKey = `${hash}.${kind.ext}`;
 
-  const r2 = storage();
-  if (r2) {
-    // 내용 해시가 곧 S3 서명의 payload hash 다 — 두 번 계산하지 않는다.
-    await r2.put(storageKey, buffer, kind.mime, hash);
-    return { storageKey, mime: kind.mime, bytes: buffer.byteLength };
-  }
-
   await fs.mkdir(ROOT, { recursive: true });
   const abs = resolveKey(storageKey);
 
@@ -198,8 +163,6 @@ function resolveKey(storageKey: string): string {
 
 /** 파일이 없으면 null (DB 행은 있는데 파일이 사라진 경우) */
 export async function read(storageKey: string): Promise<Buffer | null> {
-  const r2 = storage();
-  if (r2) return r2.read(safeKey(storageKey));
   try {
     return await fs.readFile(resolveKey(storageKey));
   } catch {
@@ -207,27 +170,14 @@ export async function read(storageKey: string): Promise<Buffer | null> {
   }
 }
 
-/** 파일 크기만. 내용을 읽지 않으므로 28MB 동영상에도 비용이 없다 (R2 는 HEAD 한 번) */
+/** 파일 크기만. 내용을 읽지 않으므로 28MB 동영상에도 비용이 없다 */
 export async function size(storageKey: string): Promise<number | null> {
-  const r2 = storage();
-  if (r2) return r2.size(safeKey(storageKey));
   try {
     const stat = await fs.stat(resolveKey(storageKey));
     return stat.isFile() ? stat.size : null;
   } catch {
     return null;
   }
-}
-
-/**
- * R2 키도 로컬 경로와 같은 규칙으로 거릅니다 — 구분자가 섞이면 prefix 밖의 객체를
- * 가리킬 수 있습니다. 키는 언제나 `<hex>.<ext>` 한 조각입니다.
- */
-function safeKey(storageKey: string): string {
-  if (storageKey !== path.basename(storageKey) || storageKey.includes('\\')) {
-    throw new Error(`잘못된 스토리지 키: ${storageKey}`);
-  }
-  return storageKey;
 }
 
 /**
@@ -239,21 +189,11 @@ function safeKey(storageKey: string): string {
  * 먼저 무너집니다 — 요청은 초당 몇 건이 아니라 **바이트**가 문제인 경로입니다.
  *
  * 반환값은 웹 표준 ReadableStream 이라 `new Response(stream)` 에 그대로 들어갑니다.
- *
- * R2 에서는 Range 헤더를 그대로 넘겨 R2 가 자른 구간을 흘려보냅니다 — 우리 서버를
- * 거치는 바이트는 사용자가 실제로 받는 만큼뿐입니다. 호출부가 `size()` 로 존재를
- * 먼저 확인하므로 여기서 객체가 없으면 에러입니다 (그 사이에 지워진 경우).
  */
-export async function readRange(
+export function readRange(
   storageKey: string,
   range?: { start: number; end: number },
-): Promise<ReadableStream<Uint8Array>> {
-  const r2 = storage();
-  if (r2) {
-    const stream = await r2.stream(safeKey(storageKey), range);
-    if (!stream) throw new Error(`첨부 파일이 없습니다: ${storageKey}`);
-    return stream;
-  }
+): ReadableStream<Uint8Array> {
   const nodeStream = createReadStream(resolveKey(storageKey), range);
   return Readable.toWeb(nodeStream) as ReadableStream<Uint8Array>;
 }
