@@ -12,7 +12,8 @@ import { fingerprint, recordOperation } from './telemetry.ts';
  * 두 가지입니다.
  *   · 단일 표 CRUD · 관계 조인 · 집계          → Prisma Client API (모듈마다 직접)
  *   · 측정 근거가 있는 튜닝 SQL · DB 안의 원자적 연산 → `prisma/sql/*.sql` (TypedSQL —
- *     `prisma generate --sql` 이 타입을 만들어 `$queryRawTyped` 로 부릅니다)
+ *     `prisma generate --sql` 이 타입을 만들고, 그 모듈을 `lib/typed-sql/` 로 꺼내 커밋해
+ *     `$queryRawTyped` 로 부릅니다 — scripts/prisma-typed-sql.mjs 머리말)
  * 어느 쪽이든 **TS 코드 안에 SQL 문자열은 없습니다.** 무엇을 어느 쪽으로 보냈고 왜인지는
  * docs/PRISMA-MIGRATION.md §6.
  *

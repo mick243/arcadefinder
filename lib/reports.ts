@@ -1,6 +1,6 @@
 import type { MachineReport, PresenceOutcome, ReportKind } from './community-types';
 import type { Prisma } from './generated/prisma/client.ts';
-import { purgeExpiredQueueReports as purgeExpiredQueueReportsSql } from './generated/prisma/sql';
+import { purgeExpiredQueueReports as purgeExpiredQueueReportsSql } from './typed-sql';
 import { getPrismaClient, iso, TX_OPTIONS, type PrismaTx } from './prisma';
 
 /**

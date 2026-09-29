@@ -1,6 +1,6 @@
 import { cacheReference } from './cache';
 import { listComments } from './comments';
-import { recalcChartStats, tierCharts } from './generated/prisma/sql';
+import { recalcChartStats, tierCharts } from './typed-sql';
 import { getPrismaClient, num } from './prisma';
 import {
   SPECIAL_CODE,

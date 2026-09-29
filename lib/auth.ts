@@ -7,7 +7,7 @@ import {
 import { promisify } from 'node:util';
 import { NextResponse } from 'next/server';
 import { SESSION_COOKIE, type SessionUser } from './auth-types';
-import { noteLoginFailure as noteLoginFailureSql } from './generated/prisma/sql';
+import { noteLoginFailure as noteLoginFailureSql } from './typed-sql';
 import { isUniqueViolation, violatedConstraint } from './pg-errors';
 import { getPrismaClient } from './prisma';
 

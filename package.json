@@ -15,6 +15,8 @@
     "db:views": "node scripts/apply-views.mjs",
     "postinstall": "prisma generate",
     "db:prisma:generate": "prisma generate",
+    "db:prisma:sql": "node scripts/prisma-typed-sql.mjs",
+    "db:prisma:sql:check": "node scripts/prisma-typed-sql.mjs --check",
     "db:prisma:build": "node scripts/prisma-migrations-build.mjs",
     "db:prisma:check": "node scripts/prisma-migrations-build.mjs --check",
     "db:prisma:baseline": "node scripts/prisma-baseline.mjs",

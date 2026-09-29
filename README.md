@@ -70,8 +70,10 @@ npm run dev
 앱의 데이터 계층은 **Prisma** 입니다 ([`lib/prisma.ts`](lib/prisma.ts) · 2026-09-22 부터).
 `lib/*.ts` 에 SQL 문자열이 없습니다 — 단일 표 CRUD·관계·집계는 Prisma Client API 로, 측정
 근거가 있는 튜닝 SQL(반경 검색·서열표 정렬 등)과 DB 안의 원자적 연산은
-[`prisma/sql/*.sql`](prisma/sql) 에 **TypedSQL** 로 두고 `prisma generate --sql` 이 타입을
-만듭니다. 무엇을 어느 쪽으로 보냈고 왜인지는 [docs/PRISMA-MIGRATION.md](docs/PRISMA-MIGRATION.md).
+[`prisma/sql/*.sql`](prisma/sql) 에 **TypedSQL** 로 두고 `npm run db:prisma:sql` 이 타입이 붙은
+모듈을 [`lib/typed-sql/`](lib/typed-sql) 로 만듭니다. 그 모듈은 **생성물이지만 커밋합니다** — TypedSQL 은
+DB 에 붙어야 만들어지는데 빌드는 DB 없이 돌기 때문입니다. `.sql` 을 고치면(주석만 고쳐도)
+다시 만드세요. 어긋나면 `tests/typed-sql.test.ts` 가 DB 없이 잡습니다. 무엇을 어느 쪽으로 보냈고 왜인지는 [docs/PRISMA-MIGRATION.md](docs/PRISMA-MIGRATION.md).
 
 ```bash
 # .env.local — 필수입니다

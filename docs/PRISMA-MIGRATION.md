@@ -413,6 +413,17 @@ npm run db:prisma:drift     # 종료 코드 2 = 차이 있음
 - [x] ~~개발 DB 에 `migrate-080` 적용~~ — 2026-09-22 17:45 적용됨 (FK 42/42 검증)
 - [x] ~~`deploy/README.md` 의 배포 순서에 `db:migrate:prisma` 반영~~ — 2026-09-22 (GUIDELINES §3 · README 도)
 - [x] ~~모듈별 Prisma Client 이관~~ — 2026-09-22 전부 (§6 결과)
+- [x] ~~DB 없는 빌드에서 TypedSQL 모듈이 없어 타입 검사가 깨짐~~ — 2026-09-29. `prisma generate --sql`
+      은 DB 에 붙어야 모듈을 만드는데 postinstall(`prisma generate`)·Vercel 빌드는 DB 없이 돕니다.
+      생성된 모듈을 `lib/typed-sql/` 로 꺼내 커밋하고, 머리에 원본 sha256 을 적어
+      `npm run db:prisma:sql:check` · `tests/typed-sql.test.ts` 가 DB 없이 대조합니다.
+      **`prisma/sql/*.sql` 을 고치거나 마이그레이션으로 컬럼 타입이 바뀌면 `npm run db:prisma:sql` 을
+      다시 돌리세요** (DB 필요).
+- [x] ~~void 를 돌려주는 DB 함수 호출이 던짐~~ — 2026-09-29. `SELECT recalc_x($1) AS done` 은
+      드라이버 어댑터가 void 컬럼을 못 읽어 "Failed to deserialize column of type 'void'" 로
+      투표·추천·리뷰 저장이 500 이었습니다. `SELECT true AS done FROM (SELECT recalc_x($1)) r` 로.
+- [x] ~~Windows 클론에서 마이그레이션 체크섬이 달라짐~~ — 2026-09-29. `.gitattributes` 에
+      `prisma/migrations/** text eol=lf`.
 - [ ] **개발 DB 베이스라인** — `npm run db:prisma:baseline` 을 아직 안 돌렸습니다. 앱을 띄우면
       "89개 미적용" 경고가 찍힙니다(동작은 됩니다 — 스키마는 이미 최신). 사본에서만 검증했으니
       실제 DB 에는 사람이 한 번 돌리세요 (DDL 0줄 · `--dry-run` 먼저).

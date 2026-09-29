@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { ping } from '@/lib/generated/prisma/sql';
+import { ping } from '@/lib/typed-sql';
 import { getPrismaClient } from '@/lib/prisma';
 
 export const runtime = 'nodejs';

@@ -1,4 +1,4 @@
-import { consumeRateCounter } from './generated/prisma/sql';
+import { consumeRateCounter } from './typed-sql';
 import { getPrismaClient } from './prisma';
 
 /**

@@ -1,5 +1,5 @@
 import { cacheReference } from './cache';
-import { arcadesWithMachines } from './generated/prisma/sql';
+import { arcadesWithMachines } from './typed-sql';
 import { getPrismaClient, num, TX_OPTIONS, type PrismaTx } from './prisma';
 import type { Arcade, ArcadeInput, ArcadeMachine, Machine, MachineGuess } from './types';
 

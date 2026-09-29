@@ -17,7 +17,7 @@ import {
 } from './board-types';
 import { cacheReference, clearReferenceCache } from './cache';
 import { Prisma } from './generated/prisma/client.ts';
-import { recalcPostStats } from './generated/prisma/sql';
+import { recalcPostStats } from './typed-sql';
 import { isRecordNotFound } from './pg-errors';
 import { getPrismaClient, iso, TX_OPTIONS, type PrismaTx } from './prisma';
 import { normalizeDoc, type RichDoc } from './rich-text';

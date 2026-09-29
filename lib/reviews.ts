@@ -1,5 +1,5 @@
 import type { ArcadeReview } from './community-types';
-import { recalcArcadeRating } from './generated/prisma/sql';
+import { recalcArcadeRating } from './typed-sql';
 import { getPrismaClient, iso } from './prisma';
 
 /**
